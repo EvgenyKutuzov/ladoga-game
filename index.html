@@ -29,10 +29,14 @@
             autoCenter: Phaser.Scale.CENTER_BOTH,
             autoRound: true
         },
+        audio: {
+            disableWebAudio: false
+        },
         scene: { preload: preloadAssets, create: createGame }
     };
 
     var game = new Phaser.Game(config);
+    var bgMusic = null;
 
     var playerContainer;
     var dialogBg, dialogText, playButton;
@@ -63,11 +67,10 @@
     var targetType=null, targetCount=0, collectedCount=0, scoreText;
     var movesLeft=20, movesText;
 
-    // ★ для перетаскивания ★
-    var dragIcon = null;          // фишка, которую тащат
-    var dragStartX=0, dragStartY=0; // исходная позиция фишки
-    var dragPointerStartX=0, dragPointerStartY=0; // начальные координаты пальца
-    var dragAxisLocked = null;   // 'x' или 'y', если ось зафиксирована
+    // ★ для перетаскивания
+    var dragIcon = null;
+    var dragStartX=0, dragStartY=0;
+    var dragPointerStartX=0, dragPointerStartY=0;
 
     function preloadAssets() {
         this.load.image('mapBG','novgorod_map.png');
@@ -83,10 +86,17 @@
         this.load.image('ship55','ship_55.png');
         this.load.image('helmet55','helmet_55.png');
         this.load.image('zhenya','zhenya.png');
+        this.load.audio('bgMusic', 'bg_music.mp3');
     }
 
     function createGame() {
         this.cameras.main.roundPixels = true;
+
+        if (!bgMusic) {
+            bgMusic = this.sound.add('bgMusic', { loop: true, volume: 0.4 });
+            bgMusic.play();
+        }
+
         startLifeRestoreTimer();
         drawMap.call(this);
     }
@@ -102,6 +112,8 @@
     function drawMap() {
         this.children.removeAll(true);
         puzzleActive = false;
+
+        if (bgMusic && !bgMusic.isPlaying) bgMusic.play();
 
         this.add.image(200,350,'mapBG').setDisplaySize(400,700);
 
@@ -193,16 +205,14 @@
         var startX = Math.round((400 - gridWidth)/2);
         var startY = Math.round((700 - gridHeight)/2 + 20);
 
-        // тёмная подложка
-        scene.add.rectangle(200, startY+gridHeight/2, gridWidth+20, gridHeight+20, 0x000000, 0.4).setOrigin(0.5);
+        // ★ СДЕЛАЛИ ПОДЛОЖКУ МЕНЕЕ ПРОЗРАЧНОЙ (0.65 вместо 0.4)
+        scene.add.rectangle(200, startY+gridHeight/2, gridWidth+20, gridHeight+20, 0x000000, 0.65).setOrigin(0.5);
 
-        // заголовок
         var tTitle = scene.add.text(0,0,location.name,{ fontSize:'22px',fontFamily:'Comfortaa, Arial',fontStyle:'bold',fill:'#ffffff',stroke:'#000000',strokeThickness:4 });
         scene.add.rectangle(200,30,tTitle.width+20,tTitle.height+10,0x000000,0.6).setOrigin(0.5);
         scene.add.text(200,30,location.name,{ fontSize:'22px',fontFamily:'Comfortaa, Arial',fontStyle:'bold',fill:'#ffffff',stroke:'#000000',strokeThickness:4 }).setOrigin(0.5);
         tTitle.destroy();
 
-        // счётчик
         var cntText = 'Собрано '+typePlural+': 0 / '+targetCount;
         var cntStyle = { fontSize:'16px',fontFamily:'Comfortaa, Arial',fontStyle:'bold',fill:'#ffcc00',stroke:'#000000',strokeThickness:3 };
         var cntTmp = scene.add.text(0,0,cntText,cntStyle);
@@ -210,7 +220,6 @@
         scoreText = scene.add.text(200,68,cntText,cntStyle).setOrigin(0.5);
         cntTmp.destroy();
 
-        // ходы
         var movesStr = 'Ходы: '+movesLeft;
         var mStyle = { fontSize:'16px',fontFamily:'Comfortaa, Arial',fontStyle:'bold',fill:'#ffffff',stroke:'#000000',strokeThickness:3 };
         var mTmp = scene.add.text(0,0,movesStr,mStyle);
@@ -218,7 +227,6 @@
         movesText = scene.add.text(200,100,movesStr,mStyle).setOrigin(0.5);
         mTmp.destroy();
 
-        // создаём сетку иконок
         for (var row=0; row<ROWS; row++) {
             grid[row] = [];
             for (var col=0; col<COLS; col++) {
@@ -231,13 +239,11 @@
                 icon.row = row;
                 icon.col = col;
                 icon.artifactType = typeKey;
-                // ★★★★★ НОВАЯ СИСТЕМА ПЕРЕТАСКИВАНИЯ ★★★★★
                 icon.on('pointerdown', onDragStart);
                 grid[row][col] = icon;
             }
         }
 
-        // кнопка назад
         var backBtn = scene.add.text(200,675,'Вернуться на карту',{
             fontSize:'14px',fill:'#ffffff',fontFamily:'Comfortaa, Arial',fontStyle:'bold',
             backgroundColor:'#333333',padding:{x:8,y:4},stroke:'#000000',strokeThickness:2
@@ -248,84 +254,62 @@
         });
     }
 
-    // ★ Драг старт ★
+    // ★ ПЕРЕТАСКИВАНИЕ БЕЗ БЛОКИРОВКИ ОСИ ★
     function onDragStart(pointer) {
         if (!puzzleActive) return;
-        if (dragIcon) return; // уже тащим
+        if (dragIcon) return;
 
-        var icon = this; // иконка, на которую нажали
+        var icon = this;
         dragIcon = icon;
         dragStartX = icon.x;
         dragStartY = icon.y;
         dragPointerStartX = pointer.x;
         dragPointerStartY = pointer.y;
-        dragAxisLocked = null;
 
-        icon.setTint(0xdddddd); // лёгкая подсветка
+        icon.setTint(0xdddddd);
 
-        // глобальные слушатели движения и отпускания
         var scene = game.scene.scenes[0];
         scene.input.on('pointermove', onDragMove);
         scene.input.on('pointerup', onDragEnd);
     }
 
-    // ★ Драг движение ★
     function onDragMove(pointer) {
         if (!dragIcon) return;
 
         var dx = pointer.x - dragPointerStartX;
         var dy = pointer.y - dragPointerStartY;
 
-        // Блокировка оси, если смещение превысило порог (10 пикселей)
-        if (dragAxisLocked === null && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
-            dragAxisLocked = (Math.abs(dx) > Math.abs(dy)) ? 'x' : 'y';
-        }
-
-        if (dragAxisLocked === 'x') {
-            dragIcon.x = dragStartX + dx;
-            dragIcon.y = dragStartY; // не даём смещаться по другой оси
-        } else if (dragAxisLocked === 'y') {
-            dragIcon.x = dragStartX;
-            dragIcon.y = dragStartY + dy;
-        } else {
-            // пока не выбрана ось, двигаемся свободно
-            dragIcon.x = dragStartX + dx;
-            dragIcon.y = dragStartY + dy;
-        }
+        // ★ ВОТ ГЛАВНОЕ ИЗМЕНЕНИЕ: иконка следует за пальцем свободно, без ограничений
+        dragIcon.x = dragStartX + dx;
+        dragIcon.y = dragStartY + dy;
     }
 
-    // ★ Драг завершение ★
     function onDragEnd(pointer) {
         if (!dragIcon) return;
 
-        // убираем глобальные слушатели
         var scene = game.scene.scenes[0];
         scene.input.off('pointermove', onDragMove);
         scene.input.off('pointerup', onDragEnd);
 
         var dx = pointer.x - dragPointerStartX;
         var dy = pointer.y - dragPointerStartY;
-        var threshold = CELL_SIZE / 2; // минимальное расстояние для свайпа
+        var threshold = CELL_SIZE / 2;
 
         var targetRow = dragIcon.row;
         var targetCol = dragIcon.col;
 
-        // Определяем направление, если смещение достаточное
+        // Определяем направление по наибольшему смещению
         if (Math.abs(dx) > threshold || Math.abs(dy) > threshold) {
             if (Math.abs(dx) > Math.abs(dy)) {
-                // горизонтальный свайп
                 targetCol += (dx > 0) ? 1 : -1;
             } else {
-                // вертикальный свайп
                 targetRow += (dy > 0) ? 1 : -1;
             }
 
-            // Проверяем, что целевая ячейка существует в пределах сетки
             if (targetRow >= 0 && targetRow < ROWS && targetCol >= 0 && targetCol < COLS) {
-                // Выполняем обмен с этой ячейкой
                 var targetIcon = grid[targetRow][targetCol];
                 if (targetIcon) {
-                    // Обновляем сетку
+                    // Обмен в сетке
                     grid[dragIcon.row][dragIcon.col] = targetIcon;
                     grid[targetRow][targetCol] = dragIcon;
                     targetIcon.row = dragIcon.row;
@@ -333,7 +317,6 @@
                     dragIcon.row = targetRow;
                     dragIcon.col = targetCol;
 
-                    // Анимируем перемещение обеих иконок в новые центры
                     var gridWidth = COLS * CELL_SIZE;
                     var gridHeight = ROWS * CELL_SIZE;
                     var startX = Math.round((400 - gridWidth)/2);
@@ -347,14 +330,11 @@
                     scene.tweens.add({ targets: dragIcon, x: newX1, y: newY1, duration: 150 });
                     scene.tweens.add({ targets: targetIcon, x: newX2, y: newY2, duration: 150 });
 
-                    // Тратим ход
                     movesLeft--;
                     if (movesText) movesText.setText('Ходы: ' + movesLeft);
 
-                    // Запускаем проверку на совпадения после анимации
                     scene.time.delayedCall(180, checkMatches);
 
-                    // Сброс перетаскивания
                     dragIcon.clearTint();
                     dragIcon = null;
                     return;
@@ -362,18 +342,16 @@
             }
         }
 
-        // Если свайп не привёл к обмену — возвращаем иконку на исходную позицию
+        // Недостаточно смещения – возвращаем на место
         dragIcon.clearTint();
         scene.tweens.add({
             targets: dragIcon,
             x: dragStartX,
             y: dragStartY,
             duration: 150,
-            onComplete: function() {
-                dragIcon = null;
-            }
+            onComplete: function() { dragIcon = null; }
         });
-        dragIcon = null; // сброс сразу, чтобы избежать конфликтов
+        dragIcon = null;
     }
 
     // ~~~ Логика поиска совпадений (без изменений) ~~~
@@ -433,7 +411,6 @@
         var startX = Math.round((400 - gridWidth)/2);
         var startY = Math.round((700 - gridHeight)/2 + 20);
 
-        // сдвигаем существующие вниз
         for (var col=0; col<COLS; col++) {
             var emptyRow = ROWS-1;
             for (var row=ROWS-1; row>=0; row--) {
@@ -450,7 +427,6 @@
                 }
             }
         }
-        // создаём новые сверху
         for (var col=0; col<COLS; col++) {
             for (var row=0; row<ROWS; row++) {
                 if (grid[row][col] === null) {
@@ -462,7 +438,6 @@
                     icon.row = row;
                     icon.col = col;
                     icon.artifactType = typeKey;
-                    // ★ важно: вешаем тот же drag-обработчик ★
                     icon.on('pointerdown', onDragStart);
                     grid[row][col] = icon;
                 }
