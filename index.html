@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+
+    <!-- ⭐ ОПИСАНИЕ ДЛЯ ССЫЛКИ (ВК, Телеграм, мессенджеры) -->
+    <meta property="og:title" content="Путь из варяг в греки — игра мальчика Жени">
+    <meta property="og:description" content="Интерактивное путешествие вокруг Ладожского озера. Собирай древние артефакты и открывай историю России!">
+    <meta property="og:image" content="https://EvgenyKutuzov.github.io/ladoga-game/novgorod_map.png">
+    <meta property="og:type" content="website">
+    <meta name="twitter:card" content="summary_large_image">
+
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            margin: auto;
+        }
+    </style>
+</head>
+<body>
+
+<script>
+    var config = {
+        type: Phaser.AUTO,
+        width: 400,
+        height: 700,
+        backgroundColor: '#87CEEB',
+        render: {
+            roundPixels: true,
+            antialias: true,
+            pixelArt: false
+        },
+        scale: {
+            mode: Phaser.Scale.FIT,
+            autoCenter: Phaser.Scale.CENTER_BOTH,
+            autoRound: true
+        },
+        scene: {
+            preload: preloadAssets,
+            create: createGame
+        }
+    };
+
+    var game = new Phaser.Game(config);
+
+    var playerContainer;
+    var dialogBg, dialogText, playButton;
+    var isMoving = false;
+    var mapBackground;
+
+    var locations = [
+        {
+            name: 'Великий Новгород',
+            x: 100, y: 200,
+            unlocked: true, completed: false,
+            targetType: 'coin', targetCount: 15,
+            fact: 'Отсюда начинался великий путь «из варяг в греки».\nКнязь Рюрик правил здесь с 862 года.',
+            icon: 'novgorod_icon',
+            puzzleBg: 'novgorod_puzzle'
+        },
+        {
+            name: 'У причала',
+            x: 320, y: 520,
+            unlocked: true, completed: false,
+            targetType: 'shield', targetCount: 12,
+            fact: 'Варяжский причал. Ладьи уходят в далёкие страны.\nЩиты нужны, чтобы защитить корабли в плавании.',
+            icon: 'prichal_icon',
+            puzzleBg: 'prichal_puzzle'
+        },
+        {
+            name: 'За рекой',
+            x: 330, y: 130,
+            unlocked: true, completed: false,
+            targetType: 'sword', targetCount: 12,
+            fact: 'Путь на север лежит через Ладогу.\nМечи помогут одолеть опасности.',
+            icon: 'za_rekoy_icon',
+            puzzleBg: 'za_rekoy_puzzle'
+        }
+    ];
+    var currentLocation = null;
+    var livesText;
+    var lives = 5;
+    var maxLives = 5;
+    var restoreTimer = null;
+
+    var puzzleActive = false;
+    var ROWS = 6, COLS = 6, CELL_SIZE = 55;
+    var TYPES = {
+        sword:  { color: 0xCCCCCC, name: 'Меч',   img: 'sword55',  plural: 'мечей' },
+        shield: { color: 0x8B4513, name: 'Щит',   img: 'shield55', plural: 'щитов' },
+        coin:   { color: 0xFFD700, name: 'Монета', img: 'coin55',   plural: 'монет' },
+        ship:   { color: 0xCD853F, name: 'Ладья',  img: 'ship55',   plural: 'ладей' },
+        helmet: { color: 0x708090, name: 'Шлем',   img: 'helmet55', plural: 'шлемов' }
+    };
+    var TYPE_KEYS = Object.keys(TYPES);
+    var grid = [];
+    var selectedCircle = null;
+    var targetType = null;
+    var targetCount = 0;
+    var collectedCount = 0;
+    var scoreText;
+    var movesLeft = 20;
+    var movesText;
+
+    function preloadAssets() {
+        this.load.image('mapBG', 'novgorod_map.png');
+        this.load.image('novgorod_icon', 'novgorod_icon.png');
+        this.load.image('prichal_icon', 'prichal_icon.png');
+        this.load.image('za_rekoy_icon', 'za_rekoy_icon.png');
+        this.load.image('novgorod_puzzle', 'novgorod_puzzle.png');
+        this.load.image('prichal_puzzle', 'prichal_puzzle.png');
+        this.load.image('za_rekoy_puzzle', 'za_rekoy_puzzle.png');
+        this.load.image('sword55', 'sword_55.png');
+        this.load.image('shield55', 'shield_55.png');
+        this.load.image('coin55', 'coin_55.png');
+        this.load.image('ship55', 'ship_55.png');
+        this.load.image('helmet55', 'helmet_55.png');
+        this.load.image('zhenya', 'zhenya.png');
+    }
+
+    function createGame() {
+        this.cameras.main.roundPixels = true;
+        startLifeRestoreTimer();
+        drawMap.call(this);
+    }
+
+    function startLifeRestoreTimer() {
+        if (restoreTimer) clearInterval(restoreTimer);
+        restoreTimer = setInterval(function() {
+            if (lives < maxLives) {
+                lives++;
+                if (livesText) livesText.setText('❤️ x ' + lives);
+            }
+        }, 30000);
+    }
+
+    function drawMap() {
+        this.children.removeAll(true);
+        puzzleActive = false;
+
+        mapBackground = this.add.image(200, 350, 'mapBG');
+        mapBackground.setDisplaySize(400, 700);
+
+        var self = this;
+        locations.forEach(function(loc) {
+            var icon = self.add.image(loc.x, loc.y, loc.icon);
+            icon.setInteractive();
+
+            var labelText = loc.name;
+            var labelFontSize = '15px';
+            var labelPadding = 6;
+            
+            var tempText = self.add.text(0, 0, labelText, {
+                fontSize: labelFontSize,
+                fontFamily: 'Comfortaa, Arial',
+                fontStyle: 'bold',
+                fill: '#ffffff',
+                stroke: '#000000',
+                strokeThickness: 4
+            });
+            var textWidth = tempText.width;
+            var textHeight = tempText.height;
+            tempText.destroy();
+
+            self.add.rectangle(
+                loc.x,
+                loc.y + 48,
+                textWidth + labelPadding * 2,
+                textHeight + labelPadding,
+                0x000000,
+                0.6
+            ).setOrigin(0.5);
+
+            self.add.text(loc.x, loc.y + 48, labelText, {
+                fontSize: labelFontSize,
+                fontFamily: 'Comfortaa, Arial',
+                fontStyle: 'bold',
+                fill: '#ffffff',
+                stroke: '#000000',
+                strokeThickness: 4
+            }).setOrigin(0.5);
+
+            loc.iconSprite = icon;
+            icon.on('pointerdown', function() {
+                if (isMoving || puzzleActive) return;
+                if (lives <= 0 && !loc.completed) {
+                    showDialog('Нет жизней! Подожди восстановления.');
+                    return;
+                }
+                movePlayerTo(loc.x, loc.y, loc);
+            });
+        });
+
+        playerContainer = this.add.container(100, 150);
+        var zhenyaSprite = this.add.image(0, 0, 'zhenya');
+        zhenyaSprite.setDisplaySize(120, 120);
+        playerContainer.add(zhenyaSprite);
+
+        dialogBg = this.add.rectangle(200, 620, 360, 110, 0x000000, 0.75);
+        dialogBg.setVisible(false);
+
+        dialogText = this.add.text(200, 598, '', {
+            fontSize: '14px',
+            fill: '#ffffff',
+            align: 'center',
+            wordWrap: { width: 320 },
+            fontFamily: 'Comfortaa, Arial',
+            fontStyle: 'bold',
+            stroke: '#000000',
+            strokeThickness: 3
+        }).setOrigin(0.5);
+        dialogText.setVisible(false);
+
+        playButton = this.add.text(200, 652, '⚔️ ИГРАТЬ ⚔️', {
+            fontSize: '18px',
+            fill: '#ffd700',
+            fontFamily: 'Comfortaa, Arial',
+            fontStyle: 'bold',
+            backgroundColor: '#333333',
+            padding: { x: 12, y: 6 },
+            stroke: '#000000',
+            strokeThickness: 2
+        }).setOrigin(0.5).setInteractive();
+        playButton.setVisible(false);
+        playButton.on('pointerdown', function() {
+            if (currentLocation && !currentLocation.completed) {
+                startPuzzle(currentLocation);
+            }
+        });
+
+        livesText = this.add.text(10, 45, '❤️ x ' + lives, {
+            fontSize: '18px',
+            fill: '#ffffff',
+            fontFamily: 'Comfortaa, Arial',
+            fontStyle: 'bold',
+            stroke: '#000000',
+            strokeThickness: 3
+        });
+
+        var hintText = 'Нажми на карту, чтобы идти';
+        var hintStyle = {
+            fontSize: '14px',
+            fill: '#ffffff',
+            align: 'center',
+            fontFamily: 'Comfortaa, Arial',
+            fontStyle: 'bold',
+            stroke: '#000000',
+            strokeThickness: 3
+        };
+        var hintTemp = this.add.text(0, 0, hintText, hintStyle);
+        var hintWidth = hintTemp.width;
+        var hintHeight = hintTemp.height;
+        hintTemp.destroy();
+
+        this.add.rectangle(200, 28, hintWidth + 16, hintHeight + 10, 0x000000, 0.6).setOrigin(0.5);
+        this.add.text(200, 28, hintText, hintStyle).setOrigin(0.5);
+
+        this.input.on('pointerdown', function(pointer) {
+            if (isMoving || puzzleActive) return;
+            var hitLocation = false;
+            locations.forEach(function(loc) {
+                if (loc.iconSprite.getBounds().contains(pointer.x, pointer.y)) {
+                    hitLocation = true;
+                }
+            });
+            if (!hitLocation) {
+                movePlayerTo(pointer.x, pointer.y, null);
+            }
+        });
+    }
+
+    function movePlayerTo(targetX, targetY, location) {
+        isMoving = true;
+        dialogBg.setVisible(false);
+        dialogText.setVisible(false);
+        playButton.setVisible(false);
+        currentLocation = null;
+
+        targetX = Math.round(targetX);
+        targetY = Math.round(targetY);
+
+        var scene = game.scene.scenes[0];
+        scene.tweens.add({
+            targets: playerContainer,
+            x: targetX,
+            y: targetY,
+            duration: 800,
+            ease: 'Power2',
+            onComplete: function() {
+                isMoving = false;
+                if (location) {
+                    currentLocation = location;
+                    if (location.completed) {
+                        showDialog('«' + location.name + '» уже свободна!\n' + location.fact);
+                    } else if (lives <= 0) {
+                        showDialog('Нет жизней! Подожди восстановления.');
+                    } else {
+                        var typePlural = TYPES[location.targetType].plural;
+                        showDialog('«' + location.name + '»\nСобери ' + location.targetCount + ' ' + typePlural + '.\nКнязь Рюрик просит помочь!');
+                        playButton.setVisible(true);
+                    }
+                }
+            }
+        });
+    }
+
+    function showDialog(message) {
+        dialogText.setText(message);
+        dialogBg.setVisible(true);
+        dialogText.setVisible(true);
+    }
+
+    function startPuzzle(location) {
+        puzzleActive = true;
+        var scene = game.scene.scenes[0];
+        scene.children.removeAll(true);
+
+        collectedCount = 0;
+        grid = [];
+        selectedCircle = null;
+        targetType = location.targetType;
+        targetCount = location.targetCount;
+        movesLeft = 20;
+        var typePlural = TYPES[targetType].plural;
+
+        scene.add.image(200, 350, location.puzzleBg).setDisplaySize(400, 700);
+
+        var gridWidth = COLS * CELL_SIZE;
+        var gridHeight = ROWS * CELL_SIZE;
+        var startX = Math.round((400 - gridWidth) / 2);
+        var startY = Math.round((700 - gridHeight) / 2 + 20);
+
+        scene.add.rectangle(
+            200,
+            startY + gridHeight / 2,
+            gridWidth + 20,
+            gridHeight + 20,
+            0x000000,
+            0.4
+        ).setOrigin(0.5);
+
+        var titleText = location.name;
+        var titleStyle = {
+            fontSize: '22px',
+            fontFamily: 'Comfortaa, Arial',
+            fontStyle: 'bold',
+            fill: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 4
+        };
+        var title = scene.add.text(0, 0, titleText, titleStyle);
+        var titleWidth = title.width;
+        var titleHeight = title.height;
+        title.destroy();
+
+        scene.add.rectangle(200, 30, titleWidth + 20, titleHeight + 10, 0x000000, 0.6).setOrigin(0.5);
+        scene.add.text(200, 30, titleText, titleStyle).setOrigin(0.5);
+
+        var counterText = 'Собрано ' + typePlural + ': 0 / ' + targetCount;
+        var counterStyle = {
+            fontSize: '16px',
+            fontFamily: 'Comfortaa, Arial',
+            fontStyle: 'bold',
+            fill: '#ffcc00',
+            stroke: '#000000',
+            strokeThickness: 3
+        };
+        var counter = scene.add.text(0, 0, counterText, counterStyle);
+        var counterWidth = counter.width;
+        var counterHeight = counter.height;
+        counter.destroy();
+
+        scene.add.rectangle(200, 68, counterWidth + 20, counterHeight + 10, 0x000000, 0.6).setOrigin(0.5);
+        scoreText = scene.add.text(200, 68, counterText, counterStyle).setOrigin(0.5);
+
+        var movesTextStr = 'Ходы: ' + movesLeft;
+        var movesStyle = {
+            fontSize: '16px',
+            fontFamily: 'Comfortaa, Arial',
+            fontStyle: 'bold',
+            fill: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 3
+        };
+        var movesTemp = scene.add.text(0, 0, movesTextStr, movesStyle);
+        var movesWidth = movesTemp.width;
+        var movesHeight = movesTemp.height;
+        movesTemp.destroy();
+
+        scene.add.rectangle(200, 100, movesWidth + 20, movesHeight + 10, 0x000000, 0.6).setOrigin(0.5);
+        movesText = scene.add.text(200, 100, movesTextStr, movesStyle).setOrigin(0.5);
+
+        for (var row = 0; row < ROWS; row++) {
+            grid[row] = [];
+            for (var col = 0; col < COLS; col++) {
+                var typeKey = TYPE_KEYS[Math.floor(Math.random() * TYPE_KEYS.length)];
+                var x = startX + col * CELL_SIZE + CELL_SIZE / 2;
+                var y = startY + row * CELL_SIZE + CELL_SIZE / 2;
+                
+                var icon = scene.add.image(x, y, TYPES[typeKey].img);
+                icon.setInteractive();
+                icon.row = row;
+                icon.col = col;
+                icon.artifactType = typeKey;
+                icon.on('pointerdown', onCircleClick);
+                grid[row][col] = icon;
+            }
+        }
+
+        var backBtn = scene.add.text(200, 675, 'Вернуться на карту', {
+            fontSize: '14px',
+            fill: '#ffffff',
+            fontFamily: 'Comfortaa, Arial',
+            fontStyle: 'bold',
+            backgroundColor: '#333333',
+            padding: { x: 8, y: 4 },
+            stroke: '#000000',
+            strokeThickness: 2
+        }).setOrigin(0.5).setInteractive();
+        backBtn.on('pointerdown', function() {
+            puzzleActive = false;
+            drawMap.call(scene);
+        });
+    }
+
+    function onCircleClick() {
+        if (!puzzleActive) return;
+        var clicked = this;
+        if (selectedCircle === null) {
+            selectedCircle = clicked;
+            clicked.setTint(0xdddddd);
+        } else if (selectedCircle === clicked) {
+            selectedCircle.clearTint();
+            selectedCircle = null;
+        } else if (isNeighbor(selectedCircle, clicked)) {
+            selectedCircle.clearTint();
+            swapAndCheck(selectedCircle, clicked);
+            selectedCircle = null;
+            movesLeft--;
+            if (movesText) movesText.setText('Ходы: ' + movesLeft);
+        } else {
+            selectedCircle.clearTint();
+            selectedCircle = clicked;
+            clicked.setTint(0xdddddd);
+        }
+    }
+
+    function isNeighbor(c1, c2) {
+        return (Math.abs(c1.row - c2.row) === 1 && c1.col === c2.col) ||
+               (Math.abs(c1.col - c2.col) === 1 && c1.row === c2.row);
+    }
+
+    function swapAndCheck(c1, c2) {
+        var r1 = c1.row, c1r = c1.col;
+        var r2 = c2.row, c2c = c2.col;
+        grid[r1][c1r] = c2;
+        grid[r2][c2c] = c1;
+        c1.row = r2; c1.col = c2c;
+        c2.row = r1; c2.col = c1r;
+
+        var scene = game.scene.scenes[0];
+        var c1x = Math.round(c2.x);
+        var c1y = Math.round(c2.y);
+        var c2x = Math.round(c1.x);
+        var c2y = Math.round(c1.y);
+        
+        scene.tweens.add({ targets: c1, x: c1x, y: c1y, duration: 200 });
+        scene.tweens.add({ targets: c2, x: c2x, y: c2y, duration: 200, onComplete: checkMatches });
+    }
+
+    function checkMatches() {
+        var toRemove = [];
+        for (var row = 0; row < ROWS; row++) {
+            for (var col = 0; col < COLS - 2; col++) {
+                var c = grid[row][col];
+                if (c && grid[row][col+1] && grid[row][col+2] &&
+                    c.artifactType === grid[row][col+1].artifactType &&
+                    c.artifactType === grid[row][col+2].artifactType) {
+                    toRemove.push(c, grid[row][col+1], grid[row][col+2]);
+                }
+            }
+        }
+        for (var col = 0; col < COLS; col++) {
+            for (var row = 0; row < ROWS - 2; row++) {
+                var c = grid[row][col];
+                if (c && grid[row+1][col] && grid[row+2][col] &&
+                    c.artifactType === grid[row+1][col].artifactType &&
+                    c.artifactType === grid[row+2][col].artifactType) {
+                    toRemove.push(c, grid[row+1][col], grid[row+2][col]);
+                }
+            }
+        }
+        if (toRemove.length > 0) {
+            removeMatches(toRemove);
+        } else {
+            if (movesLeft <= 0) {
+                loseLevel();
+            }
+        }
+    }
+
+    function removeMatches(matches) {
+        var scene = game.scene.scenes[0];
+        matches.forEach(function(icon) {
+            if (!icon) return;
+            if (icon.artifactType === targetType) {
+                collectedCount++;
+                var typePlural = TYPES[targetType].plural;
+                scoreText.setText('Собрано ' + typePlural + ': ' + collectedCount + ' / ' + targetCount);
+            }
+            scene.tweens.add({
+                targets: icon,
+                scaleX: 0, scaleY: 0, alpha: 0,
+                duration: 200,
+                onComplete: function() { icon.destroy(); }
+            });
+            grid[icon.row][icon.col] = null;
+        });
+        scene.time.delayedCall(300, fillEmptySpaces);
+    }
+
+    function fillEmptySpaces() {
+        var scene = game.scene.scenes[0];
+        var gridWidth = COLS * CELL_SIZE;
+        var gridHeight = ROWS * CELL_SIZE;
+        var startX = Math.round((400 - gridWidth) / 2);
+        var startY = Math.round((700 - gridHeight) / 2 + 20);
+
+        for (var col = 0; col < COLS; col++) {
+            var emptyRow = ROWS - 1;
+            for (var row = ROWS - 1; row >= 0; row--) {
+                if (grid[row][col] !== null) {
+                    if (row !== emptyRow) {
+                        grid[emptyRow][col] = grid[row][col];
+                        grid[row][col] = null;
+                        grid[emptyRow][col].row = emptyRow;
+                        grid[emptyRow][col].col = col;
+                        var newY = startY + emptyRow * CELL_SIZE + CELL_SIZE / 2;
+                        scene.tweens.add({ targets: grid[emptyRow][col], y: Math.round(newY), duration: 200 });
+                    }
+                    emptyRow--;
+                }
+            }
+        }
+
+        for (var col = 0; col < COLS; col++) {
+            for (var row = 0; row < ROWS; row++) {
+                if (grid[row][col] === null) {
+                    var typeKey = TYPE_KEYS[Math.floor(Math.random() * TYPE_KEYS.length)];
+                    var x = startX + col * CELL_SIZE + CELL_SIZE / 2;
+                    var y = startY + row * CELL_SIZE + CELL_SIZE / 2;
+                    var icon = scene.add.image(Math.round(x), Math.round(y), TYPES[typeKey].img);
+                    icon.setInteractive();
+                    icon.row = row;
+                    icon.col = col;
+                    icon.artifactType = typeKey;
+                    icon.on('pointerdown', onCircleClick);
+                    grid[row][col] = icon;
+                }
+            }
+        }
+
+        if (collectedCount >= targetCount) {
+            puzzleActive = false;
+            if (currentLocation) {
+                currentLocation.completed = true;
+                var factText = scene.add.text(200, 500, '✅ Пройдено!\n' + currentLocation.fact, {
+                    fontSize: '14px',
+                    fill: '#ffffff',
+                    align: 'center',
+                    wordWrap: { width: 340 },
+                    backgroundColor: '#000000aa',
+                    padding: { x: 10, y: 10 },
+                    fontFamily: 'Comfortaa, Arial',
+                    fontStyle: 'bold',
+                    stroke: '#000000',
+                    strokeThickness: 2
+                }).setOrigin(0.5);
+                scene.time.delayedCall(3000, function() {
+                    factText.destroy();
+                    drawMap.call(scene);
+                });
+            }
+        } else if (movesLeft <= 0) {
+            loseLevel();
+        } else {
+            scene.time.delayedCall(200, checkMatches);
+        }
+    }
+
+    function loseLevel() {
+        puzzleActive = false;
+        lives--;
+        if (lives < 0) lives = 0;
+        if (livesText) livesText.setText('❤️ x ' + lives);
+
+        var scene = game.scene.scenes[0];
+        var message = (lives > 0) ? 'Уровень провален! -1 жизнь.' : 'Жизни кончились! Жди восстановления.';
+        var loseText = scene.add.text(200, 350, message, {
+            fontSize: '20px',
+            fill: '#ff6666',
+            fontFamily: 'Comfortaa, Arial',
+            fontStyle: 'bold',
+            stroke: '#000000',
+            strokeThickness: 4,
+            align: 'center'
+        }).setOrigin(0.5);
+        scene.time.delayedCall(2500, function() {
+            loseText.destroy();
+            drawMap.call(scene);
+        });
+    }
+</script>
+
+</body>
+</html>
